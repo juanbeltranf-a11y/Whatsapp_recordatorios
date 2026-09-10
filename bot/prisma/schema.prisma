@@ -1,0 +1,60 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String     @id @default(uuid())
+  phone     String     @unique
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  reminders Reminder[]
+  savedItems SavedItem[]
+
+  @@map("users")
+}
+
+model Reminder {
+  id              String   @id @default(uuid())
+  texto           String
+  targetDate      DateTime
+  status          String   @default("pending") // pending | completed | cancelled
+  isRecurring     Boolean  @default(false)
+  recurrenceDays  Int?
+  scheduledAlerts Json     @default("[]") // [{"type": "-24h", "date": "...", "status": "pending|sent"}, ...]
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("reminders")
+}
+
+model SavedItem {
+  id          String   @id @default(uuid())
+  type        String   // "image" | "link" | "text"
+  content     String   // URL del enlace o texto descriptivo
+  mimeType    String?  // Para imágenes: "image/jpeg", "image/png", etc.
+  mediaData   String?  // Base64 de la imagen para preservación en BD
+  description String   // Ej: "donde vivo", "receta de pasta"
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("saved_items")
+}
+
+model Config {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("configs")
+}
+
