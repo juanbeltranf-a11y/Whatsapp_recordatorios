@@ -8,6 +8,7 @@ const { scheduleReminder, initScheduler } = require('./scheduler');
 const { saveUserItem, findUserItem, listUserItems } = require('./savedItems');
 const { transcribeAudio } = require('./audioTranscriber');
 const { downloadSong } = require('./music');
+const { downloadSocialMedia, identifyPlatform } = require('./socialDownloader');
 
 const botState = {
   status: 'DISCONNECTED',
@@ -329,6 +330,42 @@ async function handleIncomingMessage(msg) {
         .catch(async (musicErr) => {
           console.error('[WhatsApp] Music download failed:', musicErr.message);
           await clientInstance.sendMessage(chatId, `⚠️ ${musicErr.message || 'No se pudo descargar la canción solicitada.'}`);
+        });
+
+      return;
+    }
+
+    // A2. SOCIAL MEDIA DOWNLOAD INTENT (TikTok, Instagram, Facebook, etc.)
+    if (analysis.intent === 'social_media_download') {
+      const targetUrl = analysis.linkUrl || (userText.match(/https?:\/\/[^\s]+/i) || [])[0];
+      if (!targetUrl) {
+        await msg.reply(`${audioPrefix}⚠️ Por favor envía o incluye el enlace de TikTok, Instagram o Facebook que deseas descargar.`);
+        return;
+      }
+
+      const platform = identifyPlatform(targetUrl);
+      const ackMsg = `${audioPrefix}📥 Descargando contenido de *${platform}*, dame unos segundos...`;
+      botSentTexts.add(ackMsg.trim());
+      await msg.reply(ackMsg);
+
+      // Download and send in background
+      downloadSocialMedia(targetUrl)
+        .then(async (result) => {
+          try {
+            const caption = result.title ? `🎬 *${result.platform}*\n_${result.title}_` : `🎬 *${result.platform}*`;
+            await clientInstance.sendMessage(chatId, result.media, {
+              sendMediaAsDocument: false,
+              caption,
+            });
+            console.log(`[WhatsApp] 🎬 ${result.platform} media sent to ${chatId}`);
+          } catch (sendSocialErr) {
+            console.error('[WhatsApp] Error sending social media:', sendSocialErr.message);
+            await clientInstance.sendMessage(chatId, `⚠️ No se pudo enviar el archivo descargado de ${result.platform}.`);
+          }
+        })
+        .catch(async (socialErr) => {
+          console.error('[WhatsApp] Social media download failed:', socialErr.message);
+          await clientInstance.sendMessage(chatId, `⚠️ ${socialErr.message || 'No se pudo descargar el contenido de la red social.'}`);
         });
 
       return;

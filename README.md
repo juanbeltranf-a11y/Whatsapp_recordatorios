@@ -26,7 +26,12 @@ Un asistente inteligente para **WhatsApp** impulsado por Inteligencia Artificial
    - Motor optimizado con búsqueda rápida en **SoundCloud** (2 a 4 segundos, sin bloqueos de bot) y fallback a **YouTube**.
    - Conversión automática a MP3 de alta compatibilidad mediante `ffmpeg`.
 
-5. **🖥️ Dashboard Web (Next.js)**
+5. **🎬 Descarga de Videos, Fotos e Historias de Redes Sociales**
+   - Descarga contenido multimedia de **TikTok** (videos limpios sin marca de agua), **Instagram** (reels, fotos, publicaciones e historias públicas) y **Facebook** (reels y videos).
+   - Solo envía el enlace directo en el chat o pide: *"descárgame este video https://..."*.
+   - Entrega el video o imagen directamente en WhatsApp listo para ver y compartir.
+
+6. **🖥️ Dashboard Web (Next.js)**
    - Panel de control moderno para visualizar el código QR de vinculación, estado de la conexión y recordatorios activos.
 
 ---
@@ -43,6 +48,7 @@ El proyecto está organizado en dos componentes principales:
 │   │   ├── groq.js              # Procesamiento de lenguaje natural y clasificación de intents
 │   │   ├── audioTranscriber.js  # Transcripción de notas de voz con Groq Whisper
 │   │   ├── music.js             # Búsqueda y descarga de canciones (yt-dlp + ffmpeg)
+│   │   ├── socialDownloader.js  # Descarga de videos/fotos de TikTok, Instagram, Facebook
 │   │   ├── savedItems.js        # Almacenamiento y búsqueda de enlaces e imágenes
 │   │   └── scheduler.js        # Motor de recordatorios y alertas programadas
 │   ├── prisma/

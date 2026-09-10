@@ -66,6 +66,17 @@ function parseHeuristicReminder(text) {
     };
   }
 
+  // Check if text has a social media video/photo/story link to download
+  const socialUrlMatch = text.match(/https?:\/\/(?:www\.)?(?:tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|instagram\.com|facebook\.com|fb\.watch|fb\.com|youtube\.com\/shorts|x\.com|twitter\.com)\/[^\s]+/i);
+  if (socialUrlMatch && !lower.includes('guarda')) {
+    const url = socialUrlMatch[0];
+    return {
+      intent: 'social_media_download',
+      linkUrl: url,
+      responseMessage: '📥 Descargando el contenido de la red social, dame unos segundos...',
+    };
+  }
+
   // Check if text is asking for a reminder
   const hasReminderIntent =
     lower.includes('recuerda') ||
@@ -188,7 +199,7 @@ La fecha y hora actual en Colombia (Zona Horaria UTC-5 America/Bogota) es:
 
 Tu trabajo es clasificar la intención del usuario y responder ÚNICAMENTE con un JSON válido siguiendo este schema:
 {
-  "intent": "reminder" | "save_item" | "get_item" | "list_items" | "music" | "venting" | "other",
+  "intent": "reminder" | "save_item" | "get_item" | "list_items" | "music" | "social_media_download" | "venting" | "other",
   "reminders": [
     {
       "text": "descripción de la tarea específica",
@@ -238,13 +249,19 @@ REGLAS DE CLASIFICACIÓN:
    - "query": El nombre de la canción y/o artista (ej: "Fuentes de Ortiz").
    - "responseMessage": "🎵 Buscando y preparando el audio de tu canción, dame unos momentos...".
 
-6. intent = "venting":
+6. intent = "social_media_download":
+   - El usuario envía un enlace o pide descargar un video, reel, historia, tiktok, foto o publicación de redes sociales (TikTok, Instagram, Facebook, YouTube Shorts, Twitter/X, Pinterest).
+   - Ejemplos: "descárgame este video https://www.tiktok.com/...", "bájame este reel https://www.instagram.com/reel/...", "descarga esta historia https://...", o simplemente cuando el mensaje incluye un enlace de tiktok, instagram, facebook (fb.watch), youtube shorts, etc.
+   - "linkUrl": la URL extraída del contenido a descargar.
+   - "responseMessage": "📥 Descargando el contenido de la red social, dame unos segundos...".
+
+7. intent = "venting":
    - El usuario expresa sentimientos, problemas personales, tristeza o busca desahogo emocional.
    - "responseMessage": Sumamente empático, cálido, comprensivo y sin juzgar.
 
-7. intent = "other":
+8. intent = "other":
    - Preguntas generales, saludos o conversación normal.
-   - "responseMessage": Respuesta natural y amigable recordando brevemente en qué puede ayudarle (recordatorios, guardar fotos/links, música o escucharlo).
+   - "responseMessage": Respuesta natural y amigable recordando brevemente en qué puede ayudarle (recordatorios, guardar fotos/links, música, descargar videos de redes o escucharlo).
 
 IMPORTANTE: Responde ÚNICA Y EXCLUSIVAMENTE con el JSON.`;
 
