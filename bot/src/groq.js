@@ -56,17 +56,7 @@ function parseHeuristicReminder(text) {
   if (!text || typeof text !== 'string') return null;
   const lower = text.toLowerCase().trim();
 
-  // Check if text is asking for music
-  if (lower.startsWith('enviame la cancion ') || lower.startsWith('mandame la cancion ') || lower.startsWith('pon la cancion ')) {
-    const query = lower.replace(/^(enviame|mandame|pon)\s+la\s+cancion\s+/i, '').trim();
-    return {
-      intent: 'music',
-      query,
-      responseMessage: `🎵 Buscando tu canción "${query}", dame unos momentos mientras preparo el audio...`,
-    };
-  }
-
-  // Check if text has a social media video/photo/story link to download
+  // 1. Check if text has a social media video/photo/story link to download
   const socialUrlMatch = text.match(/https?:\/\/(?:www\.)?(?:tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|instagram\.com|facebook\.com|fb\.watch|fb\.com|youtube\.com\/shorts|x\.com|twitter\.com)\/[^\s]+/i);
   if (socialUrlMatch && !lower.includes('guarda')) {
     const url = socialUrlMatch[0];
@@ -75,6 +65,20 @@ function parseHeuristicReminder(text) {
       linkUrl: url,
       responseMessage: '📥 Descargando el contenido de la red social, dame unos segundos...',
     };
+  }
+
+  // 2. Check if text is asking for music (e.g. "enviame X de Y", "pon X", "ponme X", "descarga la cancion X")
+  const musicMatch = lower.match(/^(?:enviame|mandame|pon|descarga|ponme|quiero escuchar)\s+(?:la\s+cancion\s+|el\s+tema\s+|la\s+musica\s+|cancion\s+)?(.+)/i);
+  if (musicMatch) {
+    const candidate = musicMatch[1].trim();
+    const isOther = lower.includes('imagen') || lower.includes('foto') || lower.includes('enlace') || lower.includes('link') || lower.includes('recordatorio') || lower.includes('recuerda') || lower.includes('video') || lower.includes('tiktok') || lower.includes('reel') || lower.includes('historia');
+    if (!isOther && candidate.length > 2) {
+      return {
+        intent: 'music',
+        query: candidate,
+        responseMessage: `🎵 Buscando tu canción "${candidate}", dame unos momentos mientras preparo el audio...`,
+      };
+    }
   }
 
   // Check if text is asking for a reminder
@@ -184,6 +188,10 @@ function parseHeuristicReminder(text) {
  */
 async function parseUserMessage(userMessageText, context = {}) {
   const heuristic = parseHeuristicReminder(userMessageText);
+  if (heuristic && (heuristic.intent === 'social_media_download' || heuristic.intent === 'music')) {
+    console.log(`[Groq] Fast deterministic path: intent=${heuristic.intent}`);
+    return heuristic;
+  }
 
   try {
     const apiKey = await getGroqApiKey();
@@ -284,7 +292,7 @@ IMPORTANTE: Responde ÚNICA Y EXCLUSIVAMENTE con el JSON.`;
     const rawResponse = chatCompletion.choices[0]?.message?.content || '{}';
     const parsed = JSON.parse(rawResponse);
 
-    const validIntents = ['reminder', 'save_item', 'get_item', 'list_items', 'music', 'venting', 'other'];
+    const validIntents = ['reminder', 'save_item', 'get_item', 'list_items', 'music', 'social_media_download', 'venting', 'other'];
     const intent = validIntents.includes(parsed.intent) ? parsed.intent : 'other';
 
     // Normalize reminders array

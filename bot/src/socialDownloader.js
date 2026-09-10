@@ -20,7 +20,65 @@ function identifyPlatform(url) {
 }
 
 /**
- * Downloads a video, photo, story or reel from social media using yt-dlp.
+ * Dedicated fast TikTok downloader using TikWM API (HD video without watermark).
+ */
+async function downloadTikTokViaApi(targetUrl) {
+  try {
+    const res = await fetch('https://www.tikwm.com/api/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `url=${encodeURIComponent(targetUrl)}`,
+      signal: AbortSignal.timeout(15000),
+    });
+
+    const data = await res.json();
+    if (data && data.code === 0 && data.data) {
+      const videoUrl = data.data.play || data.data.wmplay;
+      const title = data.data.title || 'TikTok Video';
+      const author = data.data.author?.nickname ? ` (${data.data.author.nickname})` : '';
+      const fullTitle = `${title}${author}`.slice(0, 100);
+
+      if (videoUrl) {
+        const vidRes = await fetch(videoUrl, { signal: AbortSignal.timeout(25000) });
+        const arrayBuf = await vidRes.arrayBuffer();
+        const buffer = Buffer.from(arrayBuf);
+        const dataBase64 = buffer.toString('base64');
+        const filename = `tiktok_${Date.now()}.mp4`;
+        const media = new MessageMedia('video/mp4', dataBase64, filename);
+
+        return {
+          media,
+          platform: 'TikTok',
+          title: fullTitle,
+          isVideo: true,
+          filename,
+        };
+      } else if (Array.isArray(data.data.images) && data.data.images.length > 0) {
+        const imgUrl = data.data.images[0];
+        const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(20000) });
+        const arrayBuf = await imgRes.arrayBuffer();
+        const buffer = Buffer.from(arrayBuf);
+        const dataBase64 = buffer.toString('base64');
+        const filename = `tiktok_${Date.now()}.jpeg`;
+        const media = new MessageMedia('image/jpeg', dataBase64, filename);
+
+        return {
+          media,
+          platform: 'TikTok',
+          title: fullTitle,
+          isVideo: false,
+          filename,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[SocialDownloader] TikWM API attempt failed:', err.message);
+  }
+  return null;
+}
+
+/**
+ * Downloads a video, photo, story or reel from social media using specialized APIs and yt-dlp fallback.
  * Returns { media: MessageMedia, platform: string, title: string, isVideo: boolean, filename: string }
  */
 async function downloadSocialMedia(targetUrl) {
@@ -30,6 +88,18 @@ async function downloadSocialMedia(targetUrl) {
 
   const cleanUrl = targetUrl.trim();
   const platform = identifyPlatform(cleanUrl);
+
+  // 1. Fast dedicated path for TikTok
+  if (platform === 'TikTok') {
+    console.log(`[SocialDownloader] 📥 Attempting TikTok API for: "${cleanUrl}"...`);
+    const tikTokMedia = await downloadTikTokViaApi(cleanUrl);
+    if (tikTokMedia) {
+      console.log(`[SocialDownloader] ✅ TikTok API succeeded for: "${tikTokMedia.title}"`);
+      return tikTokMedia;
+    }
+    console.log('[SocialDownloader] TikTok API failed or not applicable, falling back to yt-dlp...');
+  }
+
   const tempPrefix = `social_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   const outputTemplate = path.join(os.tmpdir(), `${tempPrefix}.%(ext)s`);
   const titleFile = path.join(os.tmpdir(), `${tempPrefix}.title`);
