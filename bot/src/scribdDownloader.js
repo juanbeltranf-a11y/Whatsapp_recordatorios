@@ -33,9 +33,13 @@ function extractTitleFromSlug(url) {
   return null;
 }
 
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
 /**
  * Downloads a Scribd document and converts it to a clean PDF MessageMedia.
- * Reuses existing Puppeteer browser instance if provided, or launches an ephemeral one.
+ * Uses high-speed direct page extraction and token resolution.
  *
  * @param {string} url - The Scribd document URL.
  * @param {object} [browserInstance] - Active Puppeteer browser instance from WhatsApp client.
@@ -48,13 +52,11 @@ async function downloadScribdPdf(url, browserInstance = null) {
   }
 
   let title = extractTitleFromSlug(url) || 'Documento Scribd';
-  const embedUrl = `https://www.scribd.com/embeds/${docId}/content?start_page=1&view_mode=scroll`;
-
   let browser = browserInstance;
   let isEphemeralBrowser = false;
 
   if (!browser || (typeof browser.isConnected === 'function' && !browser.isConnected())) {
-    console.log('[ScribdDownloader] Launching ephemeral Chromium browser...');
+    console.log('[ScribdDownloader] Launching Chromium browser...');
     browser = await puppeteer.launch({
       headless: 'new',
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
@@ -70,135 +72,287 @@ async function downloadScribdPdf(url, browserInstance = null) {
     isEphemeralBrowser = true;
   }
 
-  let page = null;
-  try {
-    console.log(`[ScribdDownloader] Opening tab for Scribd docId ${docId}...`);
-    page = await browser.newPage();
+  let docPage = null;
+  let cleanTab = null;
+  const tempRawPdf = path.join('/tmp', `scribd_${docId}_${Date.now()}_raw.pdf`);
+  const tempFinalPdf = path.join('/tmp', `scribd_${docId}_${Date.now()}_final.pdf`);
 
-    await page.setUserAgent(
+  try {
+    console.log(`[ScribdDownloader] Iniciando extracción rápida para docId ${docId}...`);
+    docPage = await browser.newPage();
+    await docPage.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     );
-    await page.setViewport({ width: 1200, height: 1600 });
+    await docPage.setViewport({ width: 1200, height: 1600 });
 
-    // Navigate to embed viewer with 35s timeout
-    await page.goto(embedUrl, {
-      waitUntil: ['domcontentloaded', 'networkidle2'],
+    const targetUrl = url.includes('/embeds/') ? url : `https://es.scribd.com/document/${docId}`;
+    await docPage.goto(targetUrl, {
+      waitUntil: 'domcontentloaded',
       timeout: 35000,
     });
 
-    // Scroll through pages to trigger lazy-loaded text and images
-    await page.evaluate(async () => {
-      const pages = document.querySelectorAll('.outer_page');
-      for (let i = 0; i < pages.length; i++) {
-        pages[i].scrollIntoView();
-        if (window.docManager && typeof window.docManager.gotoPage === 'function') {
-          window.docManager.gotoPage(i + 1);
-        }
-        await new Promise((r) => setTimeout(r, 60));
+    const extraction = await docPage.evaluate(async () => {
+      const dm = window.docManager;
+      if (!dm || !dm.pages) {
+        return { error: 'No se encontró docManager en esta página.' };
       }
-    });
 
-    // Wait a brief moment for pending font/image network requests
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+      const pageNums = Object.keys(dm.pages).map(Number).sort((a, b) => a - b);
+      const total = pageNums.length;
+      const pages = [];
+      const allFontIds = new Set();
 
-    // Clean DOM and apply CSS print styling
-    const extractionMeta = await page.evaluate(() => {
-      // Remove extraneous UI elements (toolbars, headers, footers, popups, promotions, banners)
-      const selectors = [
-        '.toolbar',
-        '.header',
-        '.footer',
-        '.mobile_banner',
-        '.promotions',
-        '.between_page_ads',
-        '.promo_banner',
-        '.upsell_banner',
-        '.document_toolbar',
-        '.between_page_portal_root',
-        '.between_page_module',
-        '.page_missing_explanation',
-      ];
-      selectors.forEach((sel) => {
-        document.querySelectorAll(sel).forEach((el) => el.remove());
-      });
+      const batchSize = 35;
+      for (let i = 0; i < total; i += batchSize) {
+        const batch = pageNums.slice(i, i + batchSize);
+        const batchResults = await Promise.all(
+          batch.map(async (n) => {
+            const p = dm.pages[n];
+            if (!p || !p.contentUrl) return null;
 
-      // Reset scrollers so Chromium print engine prints all pages
-      const scrollers = document.querySelectorAll('.document_scroller, .body_container, html, body');
-      scrollers.forEach((el) => {
-        el.style.setProperty('overflow', 'visible', 'important');
-        el.style.setProperty('height', 'auto', 'important');
-        el.style.setProperty('max-height', 'none', 'important');
-        el.style.setProperty('position', 'static', 'important');
-      });
+            try {
+              const res = await fetch(p.contentUrl);
+              if (!res.ok) return null;
+              const text = await res.text();
 
-      // Process outer_page elements
-      let validPages = 0;
-      const allPages = Array.from(document.querySelectorAll('.outer_page'));
-      allPages.forEach((p) => {
-        const hasImg = p.querySelector('img') && p.querySelector('img').naturalWidth > 0;
-        const hasText = (p.innerText || '').trim().length > 10;
-        if (!hasImg && !hasText) {
-          p.remove();
-        } else {
-          validPages++;
-          p.style.setProperty('page-break-after', 'always', 'important');
-          p.style.setProperty('break-after', 'page', 'important');
-          p.style.setProperty('page-break-inside', 'avoid', 'important');
-          p.style.setProperty('break-inside', 'avoid', 'important');
-          p.style.setProperty('margin', '0 auto 20px auto', 'important');
-          p.style.setProperty('display', 'block', 'important');
+              let html = '';
+              window['cb_' + n] = (arr) => { html = arr[0]; };
+              try { eval(text.replace(/page\d+_callback/, 'cb_' + n)); } catch (e) {}
+              delete window['cb_' + n];
+
+              if (!html) return null;
+
+              const div = document.createElement('div');
+              div.innerHTML = html;
+              div.querySelectorAll('img').forEach((img) => {
+                const orig = img.getAttribute('orig');
+                if (orig && dm.subImageSrc) {
+                  img.src = dm.subImageSrc(orig);
+                } else if (orig) {
+                  img.src = orig.replace('http://html.scribd.com', 'https://html.scribdassets.com');
+                }
+              });
+
+              const matches = html.match(/ff\d+/g) || [];
+              matches.forEach((m) => allFontIds.add(m.replace('ff', '')));
+
+              const np = div.querySelector('.newpage');
+              const w = np ? parseInt(np.style.width) || 893 : 893;
+              const h = np ? parseInt(np.style.height) || 1263 : 1263;
+
+              return { n, html: div.innerHTML, w, h };
+            } catch (err) {
+              return null;
+            }
+          })
+        );
+
+        for (const item of batchResults) {
+          if (item) pages.push(item);
         }
-      });
+      }
 
-      const docTitle = document.title && document.title !== 'Scribd' ? document.title : null;
-      return { validPages, docTitle };
+      pages.sort((a, b) => a.n - b.n);
+      return {
+        docTitle: document.title,
+        assetPrefix: dm.assetPrefix,
+        fontIds: Array.from(allFontIds),
+        totalPages: total,
+        pages,
+      };
     });
 
-    if (extractionMeta.docTitle && title === 'Documento Scribd') {
-      title = extractionMeta.docTitle;
+    await docPage.close();
+    docPage = null;
+
+    if (!extraction || !extraction.pages || extraction.pages.length === 0) {
+      throw new Error('No se pudo extraer el contenido del documento.');
     }
 
-    if (extractionMeta.validPages === 0) {
-      throw new Error('No se pudo encontrar contenido visible o accesible en este documento de Scribd.');
+    if (extraction.docTitle && title === 'Documento Scribd') {
+      title = extraction.docTitle.replace(/\|.*$/i, '').trim();
     }
 
-    console.log(`[ScribdDownloader] Printing ${extractionMeta.validPages} pages to PDF...`);
+    console.log(`[ScribdDownloader] Extracción completada: ${extraction.pages.length} páginas. Renderizando PDF...`);
 
-    const pdfBuffer = await page.pdf({
-      format: 'A4',
+    cleanTab = await browser.newPage();
+    const firstW = extraction.pages[0]?.w || 893;
+    const firstH = extraction.pages[0]?.h || 1263;
+    await cleanTab.setViewport({ width: firstW, height: firstH });
+
+    const fontFaces = (extraction.fontIds || []).map((id) => `
+      @font-face {
+        font-family: 'ff${id}';
+        src: url('https://html.scribdassets.com/${extraction.assetPrefix}/fonts/${id.padStart(4, '0')}.woff2') format('woff2');
+        font-display: block;
+      }
+      .ff${id} {
+        font-family: 'ff${id}', sans-serif;
+      }
+    `).join('\n');
+
+    const cleanHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          ${fontFaces}
+          @page {
+            size: ${firstW}px ${firstH}px;
+            margin: 0;
+          }
+          * { box-sizing: border-box; }
+          html, body {
+            margin: 0;
+            padding: 0;
+            background: #ffffff;
+          }
+          .page_container {
+            width: ${firstW}px;
+            height: ${firstH}px;
+            position: relative;
+            overflow: hidden;
+            background: #ffffff;
+            page-break-after: always;
+            break-after: page;
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .newpage {
+            position: relative !important;
+            margin: 0 !important;
+            overflow: hidden !important;
+            background: #ffffff !important;
+          }
+          .image_layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+          }
+          .image_layer img.absimg {
+            position: absolute;
+          }
+          .text_layer {
+            width: 0px;
+            height: 0px;
+            position: absolute;
+            top: 0px;
+            left: 0px;
+            transform: scale(0.2);
+            transform-origin: left top;
+          }
+          .text_layer div, .text_layer span {
+            white-space: nowrap;
+            padding: 0px;
+            margin: 0px;
+            border: none;
+            line-height: 1;
+          }
+          .text_layer span { height: 1px; }
+          .text_layer span.a, .text_layer span.g {
+            position: absolute;
+            border: none;
+            left: 0px;
+          }
+          .text_layer span.w {
+            white-space: nowrap;
+            padding: 0px;
+            margin: 0px;
+            border: none;
+            height: 1px;
+            line-height: 1;
+            display: inline-block;
+          }
+          .text_layer span.l { margin: 0px; }
+          .text_layer span.l, .text_layer span.l1 {
+            white-space: nowrap;
+            padding: 0px;
+            border: none;
+            height: 1px;
+            line-height: 1;
+            display: inline;
+          }
+          .text_layer span.l1 { margin: 0px 0px 0px -1px; }
+          .text_layer span.l2 { margin: 0px 0px 0px -2px; }
+          .text_layer span.l2, .text_layer span.l3 {
+            white-space: nowrap;
+            padding: 0px;
+            border: none;
+            height: 1px;
+            line-height: 1;
+            display: inline;
+          }
+          .text_layer span.l3 { margin: 0px 0px 0px -3px; }
+        </style>
+      </head>
+      <body>
+        ${extraction.pages.map((p) => `
+          <div class="page_container">
+            ${p.html}
+          </div>
+        `).join('')}
+      </body>
+      </html>
+    `;
+
+    await cleanTab.setContent(cleanHtml, { waitUntil: 'load', timeout: 60000 });
+    await cleanTab.evaluate(async () => {
+      await document.fonts.ready;
+      const imgs = Array.from(document.querySelectorAll('img'));
+      await Promise.all(
+        imgs.map((i) => (i.complete ? Promise.resolve() : new Promise((r) => {
+          i.onload = r;
+          i.onerror = r;
+          setTimeout(r, 4000);
+        })))
+      );
+    });
+
+    const pdfBuffer = await cleanTab.pdf({
+      width: `${firstW}px`,
+      height: `${firstH}px`,
       printBackground: true,
-      margin: { top: '5mm', bottom: '5mm', left: '5mm', right: '5mm' },
+      margin: { top: 0, bottom: 0, left: 0, right: 0 },
+      timeout: 0,
     });
 
-    if (!pdfBuffer || pdfBuffer.length === 0) {
-      throw new Error('Error al generar el archivo PDF desde el documento.');
-    }
+    fs.writeFileSync(tempRawPdf, pdfBuffer);
+    console.log(`[ScribdDownloader] Raw PDF: ${(pdfBuffer.length / 1024 / 1024).toFixed(2)} MB`);
 
-    // WhatsApp safe limit: 50MB
-    if (pdfBuffer.length > 50 * 1024 * 1024) {
-      throw new Error('El documento PDF generado excede el límite de 50 MB permitido por WhatsApp.');
+    let finalPdfPath = tempRawPdf;
+    try {
+      execSync(`gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.4 -dPDFSETTINGS=/ebook -dNOPAUSE -dQUIET -dBATCH -sOutputFile=${tempFinalPdf} ${tempRawPdf}`);
+      if (fs.existsSync(tempFinalPdf) && fs.statSync(tempFinalPdf).size > 0) {
+        finalPdfPath = tempFinalPdf;
+      }
+    } catch (gsErr) {
+      console.warn('[ScribdDownloader] Ghostscript compression warning:', gsErr.message);
     }
 
     const sanitizedTitle = title.replace(/[/\\?%*:|"<>\.]/g, '_').trim().slice(0, 80) || 'documento_scribd';
     const filename = `${sanitizedTitle}.pdf`;
-    const media = new MessageMedia('application/pdf', pdfBuffer.toString('base64'), filename);
+    const media = MessageMedia.fromFilePath(finalPdfPath);
+    media.filename = filename;
 
-    console.log(`[ScribdDownloader] ✅ Generated PDF "${filename}" (${pdfBuffer.length} bytes, ${extractionMeta.validPages} pages)`);
+    const finalStats = fs.statSync(finalPdfPath);
+    console.log(`[ScribdDownloader] ✅ Final PDF "${filename}" (${(finalStats.size / 1024 / 1024).toFixed(2)} MB, ${extraction.pages.length} páginas)`);
 
     return {
       media,
       title,
-      pageCount: extractionMeta.validPages,
+      pageCount: extraction.pages.length,
       filename,
-      sizeBytes: pdfBuffer.length,
+      sizeBytes: finalStats.size,
     };
   } finally {
-    if (page) {
-      await page.close().catch(() => {});
-    }
-    if (isEphemeralBrowser && browser) {
-      await browser.close().catch(() => {});
-    }
+    if (docPage) await docPage.close().catch(() => {});
+    if (cleanTab) await cleanTab.close().catch(() => {});
+    if (isEphemeralBrowser && browser) await browser.close().catch(() => {});
+    try { if (fs.existsSync(tempRawPdf)) fs.unlinkSync(tempRawPdf); } catch (e) {}
+    try { if (fs.existsSync(tempFinalPdf)) fs.unlinkSync(tempFinalPdf); } catch (e) {}
   }
 }
 
