@@ -2,6 +2,8 @@
 
 Un asistente inteligente para **WhatsApp** impulsado por Inteligencia Artificial (**Groq / Llama 3** y **Whisper**) con persistencia en **PostgreSQL**, motor de recordatorios programados, almacenamiento de notas/imágenes y descarga de música.
 
+> 📖 **Documentación Técnica y Arquitectura:** Para una explicación exhaustiva del código, diagramas de flujo, manual de diagnóstico de fallos y guía de escalabilidad empresarial, consulta [ARCHITECTURE.md](ARCHITECTURE.md).
+
 ---
 
 ## 🌟 Características Principales
@@ -31,7 +33,12 @@ Un asistente inteligente para **WhatsApp** impulsado por Inteligencia Artificial
    - Solo envía el enlace directo en el chat o pide: *"descárgame este video https://..."*.
    - Entrega el video o imagen directamente en WhatsApp listo para ver y compartir.
 
-6. **🖥️ Dashboard Web (Next.js)**
+6. **📄 Descarga Automática de Documentos PDF de Scribd**
+   - Descarga y convierte documentos de **Scribd** en archivos PDF limpios y completos directamente a tu chat de WhatsApp.
+   - Solo envía el enlace del documento de Scribd (ej: `https://www.scribd.com/document/...` o `https://es.scribd.com/document/...`).
+   - El bot procesa y ensambla todas las páginas del documento, vectoriza el texto y las imágenes, y te entrega el archivo PDF listo para leer e imprimir.
+
+7. **🖥️ Dashboard Web (Next.js)**
    - Panel de control moderno para visualizar el código QR de vinculación, estado de la conexión y recordatorios activos.
 
 ---
@@ -49,6 +56,7 @@ El proyecto está organizado en dos componentes principales:
 │   │   ├── audioTranscriber.js  # Transcripción de notas de voz con Groq Whisper
 │   │   ├── music.js             # Búsqueda y descarga de canciones (yt-dlp + ffmpeg)
 │   │   ├── socialDownloader.js  # Descarga de videos/fotos de TikTok, Instagram, Facebook
+│   │   ├── scribdDownloader.js  # Descarga y conversión de documentos Scribd a PDF
 │   │   ├── savedItems.js        # Almacenamiento y búsqueda de enlaces e imágenes
 │   │   └── scheduler.js        # Motor de recordatorios y alertas programadas
 │   ├── prisma/

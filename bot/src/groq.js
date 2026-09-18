@@ -56,7 +56,18 @@ function parseHeuristicReminder(text) {
   if (!text || typeof text !== 'string') return null;
   const lower = text.toLowerCase().trim();
 
-  // 1. Check if text has a social media video/photo/story link to download
+  // 1. Check if text has a Scribd document link to download as PDF
+  const scribdUrlMatch = text.match(/https?:\/\/(?:[a-zA-Z0-9_-]+\.)?scribd\.com\/(?:document|doc|embeds|presentation|d)\/[^\s]+/i);
+  if (scribdUrlMatch && !lower.includes('guarda')) {
+    const url = scribdUrlMatch[0];
+    return {
+      intent: 'scribd_download',
+      linkUrl: url,
+      responseMessage: '📄 Procesando y descargando el documento PDF de Scribd, dame unos segundos...',
+    };
+  }
+
+  // 2. Check if text has a social media video/photo/story link to download
   const socialUrlMatch = text.match(/https?:\/\/(?:www\.)?(?:tiktok\.com|vm\.tiktok\.com|vt\.tiktok\.com|instagram\.com|facebook\.com|fb\.watch|fb\.com|youtube\.com\/shorts|x\.com|twitter\.com)\/[^\s]+/i);
   if (socialUrlMatch && !lower.includes('guarda')) {
     const url = socialUrlMatch[0];
@@ -67,7 +78,7 @@ function parseHeuristicReminder(text) {
     };
   }
 
-  // 2. Check if text is asking for music (e.g. "enviame X de Y", "pon X", "ponme X", "descarga la cancion X")
+  // 3. Check if text is asking for music (e.g. "enviame X de Y", "pon X", "ponme X", "descarga la cancion X")
   const musicMatch = lower.match(/^(?:enviame|mandame|pon|descarga|ponme|quiero escuchar)\s+(?:la\s+cancion\s+|el\s+tema\s+|la\s+musica\s+|cancion\s+)?(.+)/i);
   if (musicMatch) {
     const candidate = musicMatch[1].trim();
@@ -188,7 +199,7 @@ function parseHeuristicReminder(text) {
  */
 async function parseUserMessage(userMessageText, context = {}) {
   const heuristic = parseHeuristicReminder(userMessageText);
-  if (heuristic && (heuristic.intent === 'social_media_download' || heuristic.intent === 'music')) {
+  if (heuristic && (heuristic.intent === 'social_media_download' || heuristic.intent === 'music' || heuristic.intent === 'scribd_download')) {
     console.log(`[Groq] Fast deterministic path: intent=${heuristic.intent}`);
     return heuristic;
   }
@@ -207,7 +218,7 @@ La fecha y hora actual en Colombia (Zona Horaria UTC-5 America/Bogota) es:
 
 Tu trabajo es clasificar la intención del usuario y responder ÚNICAMENTE con un JSON válido siguiendo este schema:
 {
-  "intent": "reminder" | "save_item" | "get_item" | "list_items" | "music" | "social_media_download" | "venting" | "other",
+  "intent": "reminder" | "save_item" | "get_item" | "list_items" | "music" | "social_media_download" | "scribd_download" | "venting" | "other",
   "reminders": [
     {
       "text": "descripción de la tarea específica",
@@ -263,13 +274,18 @@ REGLAS DE CLASIFICACIÓN:
    - "linkUrl": la URL extraída del contenido a descargar.
    - "responseMessage": "📥 Descargando el contenido de la red social, dame unos segundos...".
 
-7. intent = "venting":
+7. intent = "scribd_download":
+   - El usuario envía un enlace o pide descargar un documento o PDF de Scribd (ej: "descárgame este pdf https://www.scribd.com/document/...", "bájame este documento de scribd https://...", o al pegar un enlace de scribd.com).
+   - "linkUrl": la URL extraída del documento Scribd.
+   - "responseMessage": "📄 Procesando y descargando el PDF de Scribd, dame unos momentos...".
+
+8. intent = "venting":
    - El usuario expresa sentimientos, problemas personales, tristeza o busca desahogo emocional.
    - "responseMessage": Sumamente empático, cálido, comprensivo y sin juzgar.
 
-8. intent = "other":
+9. intent = "other":
    - Preguntas generales, saludos o conversación normal.
-   - "responseMessage": Respuesta natural y amigable recordando brevemente en qué puede ayudarle (recordatorios, guardar fotos/links, música, descargar videos de redes o escucharlo).
+   - "responseMessage": Respuesta natural y amigable recordando brevemente en qué puede ayudarle (recordatorios, guardar fotos/links, música, descargar videos de redes, descargar PDFs de Scribd o escucharlo).
 
 IMPORTANTE: Responde ÚNICA Y EXCLUSIVAMENTE con el JSON.`;
 
@@ -292,7 +308,7 @@ IMPORTANTE: Responde ÚNICA Y EXCLUSIVAMENTE con el JSON.`;
     const rawResponse = chatCompletion.choices[0]?.message?.content || '{}';
     const parsed = JSON.parse(rawResponse);
 
-    const validIntents = ['reminder', 'save_item', 'get_item', 'list_items', 'music', 'social_media_download', 'venting', 'other'];
+    const validIntents = ['reminder', 'save_item', 'get_item', 'list_items', 'music', 'social_media_download', 'scribd_download', 'venting', 'other'];
     const intent = validIntents.includes(parsed.intent) ? parsed.intent : 'other';
 
     // Normalize reminders array

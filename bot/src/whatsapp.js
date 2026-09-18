@@ -9,6 +9,7 @@ const { saveUserItem, findUserItem, listUserItems } = require('./savedItems');
 const { transcribeAudio } = require('./audioTranscriber');
 const { downloadSong } = require('./music');
 const { downloadSocialMedia, identifyPlatform } = require('./socialDownloader');
+const { downloadScribdPdf } = require('./scribdDownloader');
 
 const botState = {
   status: 'DISCONNECTED',
@@ -366,6 +367,41 @@ async function handleIncomingMessage(msg) {
         .catch(async (socialErr) => {
           console.error('[WhatsApp] Social media download failed:', socialErr.message);
           await clientInstance.sendMessage(chatId, `⚠️ ${socialErr.message || 'No se pudo descargar el contenido de la red social.'}`);
+        });
+
+      return;
+    }
+
+    // A3. SCRIBD PDF DOWNLOAD INTENT
+    if (analysis.intent === 'scribd_download') {
+      const targetUrl = analysis.linkUrl || (userText.match(/https?:\/\/[^\s]+/i) || [])[0];
+      if (!targetUrl) {
+        await msg.reply(`${audioPrefix}⚠️ Por favor envía o incluye el enlace del documento de Scribd que deseas descargar.`);
+        return;
+      }
+
+      const ackMsg = `${audioPrefix}📄 Procesando y descargando el PDF de *Scribd*, dame unos momentos...`;
+      botSentTexts.add(ackMsg.trim());
+      await msg.reply(ackMsg);
+
+      // Download and send PDF in background using clientInstance.pupBrowser
+      downloadScribdPdf(targetUrl, clientInstance?.pupBrowser)
+        .then(async (result) => {
+          try {
+            const caption = `📄 *Scribd:* ${result.title}\n_(${result.pageCount} páginas - ${(result.sizeBytes / 1024).toFixed(0)} KB)_`;
+            await clientInstance.sendMessage(chatId, result.media, {
+              sendMediaAsDocument: true,
+              caption,
+            });
+            console.log(`[WhatsApp] 📄 Scribd PDF "${result.filename}" sent to ${chatId}`);
+          } catch (sendPdfErr) {
+            console.error('[WhatsApp] Error sending Scribd PDF:', sendPdfErr.message);
+            await clientInstance.sendMessage(chatId, `⚠️ No se pudo enviar el documento PDF descargado: ${sendPdfErr.message}`);
+          }
+        })
+        .catch(async (scribdErr) => {
+          console.error('[WhatsApp] Scribd download failed:', scribdErr.message);
+          await clientInstance.sendMessage(chatId, `⚠️ ${scribdErr.message || 'No se pudo descargar el documento de Scribd.'}`);
         });
 
       return;
