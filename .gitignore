@@ -43,3 +43,16 @@ tmp/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Local docs and media
+*.pdf
+*.zip
+*.jpeg
+*.jpg
+*.png
+*.mpeg
+colegio-gimnasio-latinoamericano/
+grado_*/
+AGENTS.md
+GEMINI.md
+ARCHITECTURE.md

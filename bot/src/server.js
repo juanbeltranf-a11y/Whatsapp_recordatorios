@@ -283,7 +283,98 @@ function createServer() {
   app.delete('/api/reminders/:id', async (req, res) => {
     try {
       const { id } = req.params;
+      const { cancelReminderJobs } = require('./scheduler');
+      cancelReminderJobs(id);
       await prisma.reminder.delete({ where: { id } });
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Reminder types endpoint
+  app.get('/api/reminders/types', (req, res) => {
+    const { getReminderTypesInfo } = require('./reminderManager');
+    res.json({
+      types: [
+        {
+          id: 'exact',
+          name: 'Puntual (De una sola vez)',
+          icon: '⏰',
+          description: 'Para fechas y horas fijas. Incluye pre-alertas automáticas 24h antes y 1h antes.',
+          example: 'Recuérdame pagar el recibo mañana a las 3pm'
+        },
+        {
+          id: 'daily',
+          name: 'Recurrente Diario',
+          icon: '🔄',
+          description: 'Se repite todos los días a la misma hora.',
+          example: 'Recuérdame todos los días a las 8am tomar vitaminas'
+        },
+        {
+          id: 'weekly',
+          name: 'Recurrente Semanal',
+          icon: '📅',
+          description: 'Se repite días específicos de la semana.',
+          example: 'Recuérdame los lunes a las 9am reunión de equipo'
+        },
+        {
+          id: 'relative',
+          name: 'Relativo / Cuenta Regresiva',
+          icon: '⏳',
+          description: 'Avisos en minutos u horas.',
+          example: 'Recuérdame en 25 minutos sacar el pollo del horno'
+        }
+      ],
+      infoText: getReminderTypesInfo()
+    });
+  });
+
+  // Transactions endpoint
+  app.get('/api/transactions', async (req, res) => {
+    try {
+      const { userId, type, limit = 50 } = req.query;
+      const where = {};
+      if (userId) where.userId = userId;
+      if (type) where.type = type;
+
+      const transactions = await prisma.transaction.findMany({
+        where,
+        orderBy: { date: 'desc' },
+        take: parseInt(limit, 10) || 50,
+        include: {
+          user: {
+            select: { phone: true },
+          },
+        },
+      });
+
+      res.json(transactions);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Financial report endpoint
+  app.get('/api/transactions/report', async (req, res) => {
+    try {
+      const { userId, period = 'today' } = req.query;
+      if (!userId) {
+        return res.status(400).json({ error: 'Falta el parámetro userId' });
+      }
+
+      const { getFinancialReport } = require('./finance');
+      const report = await getFinancialReport({ userId, period });
+      res.json(report);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/transactions/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      await prisma.transaction.delete({ where: { id } });
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });

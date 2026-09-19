@@ -195,8 +195,26 @@ async function initScheduler(whatsappClient) {
   }
 }
 
+/**
+ * Cancels all scheduled node-schedule jobs for a specific reminder ID
+ */
+function cancelReminderJobs(reminderId) {
+  let count = 0;
+  for (const [key, job] of activeJobs.entries()) {
+    if (key.startsWith(`${reminderId}_`)) {
+      job.cancel();
+      activeJobs.delete(key);
+      count++;
+    }
+  }
+  console.log(`[Scheduler] Cancelled ${count} cron jobs for reminder ${reminderId}`);
+  return count;
+}
+
 module.exports = {
   scheduleReminder,
   initScheduler,
+  cancelReminderJobs,
   activeJobs,
 };
+

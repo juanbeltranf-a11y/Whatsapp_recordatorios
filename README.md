@@ -38,8 +38,14 @@ Un asistente inteligente para **WhatsApp** impulsado por Inteligencia Artificial
    - Solo envía el enlace del documento de Scribd (ej: `https://www.scribd.com/document/...` o `https://es.scribd.com/document/...`).
    - El bot procesa y ensambla todas las páginas del documento, vectoriza el texto y las imágenes, y te entrega el archivo PDF listo para leer e imprimir.
 
-7. **🖥️ Dashboard Web (Next.js)**
-   - Panel de control moderno para visualizar el código QR de vinculación, estado de la conexión y recordatorios activos.
+7. **💰 Control de Dinero, Gastos, Ingresos y Reportes Financieros**
+   - **Registro de egresos y compras:** *"Hoy me gasté $100.000"* (si no especificas en qué, el bot te pregunta amablemente), *"acabé de gastar $10.000 en un pollo"*, o *"le di $50.000 a Carlos"*.
+   - **Registro de ingresos y pagos:** *"Me dieron $10.000 en efectivo"* o *"me transfirieron $15.000 a la cuenta"*.
+   - **Reportes inteligentes y balances:** Pide en cualquier momento *"reporte del día"*, *"reporte del día anterior"* (ayer), *"reporte de la semana"* o *"reporte del mes"*. El bot entrega el desglose detallado con horas, totales de ingresos, egresos y balance neto en pesos colombianos.
+   - **Gestión rápida:** *"Borra el último gasto"* para anular transacciones erróneas.
+
+8. **🖥️ Dashboard Web (Next.js)**
+   - Panel de control moderno para visualizar el código QR de vinculación, estado de la conexión, recordatorios y transacciones.
 
 ---
 
@@ -53,6 +59,7 @@ El proyecto está organizado en dos componentes principales:
 │   │   ├── index.js             # Punto de entrada y servidor Express (QR & API)
 │   │   ├── whatsapp.js          # Cliente WhatsApp-Web.js, eventos y gestión de cola
 │   │   ├── groq.js              # Procesamiento de lenguaje natural y clasificación de intents
+│   │   ├── finance.js           # Motor de finanzas, ingresos, egresos y reportes
 │   │   ├── audioTranscriber.js  # Transcripción de notas de voz con Groq Whisper
 │   │   ├── music.js             # Búsqueda y descarga de canciones (yt-dlp + ffmpeg)
 │   │   ├── socialDownloader.js  # Descarga de videos/fotos de TikTok, Instagram, Facebook
@@ -60,7 +67,7 @@ El proyecto está organizado en dos componentes principales:
 │   │   ├── savedItems.js        # Almacenamiento y búsqueda de enlaces e imágenes
 │   │   └── scheduler.js        # Motor de recordatorios y alertas programadas
 │   ├── prisma/
-│   │   └── schema.prisma        # Modelos PostgreSQL (User, Reminder, SavedItem)
+│   │   └── schema.prisma        # Modelos PostgreSQL (User, Reminder, SavedItem, Transaction, UserState)
 │   ├── Dockerfile               # Configuración de despliegue en producción (Railway)
 │   └── package.json
 │

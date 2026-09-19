@@ -10,6 +10,21 @@ const { transcribeAudio } = require('./audioTranscriber');
 const { downloadSong } = require('./music');
 const { downloadSocialMedia, identifyPlatform } = require('./socialDownloader');
 const { downloadScribdPdf } = require('./scribdDownloader');
+const {
+  formatCurrencyCOP,
+  formatTimeColombia,
+  recordTransaction,
+  getUserState,
+  setUserState,
+  clearUserState,
+  deleteLastTransaction,
+  getFinancialReport,
+} = require('./finance');
+const {
+  listUserReminders,
+  deleteUserReminder,
+  getReminderTypesInfo,
+} = require('./reminderManager');
 
 const botState = {
   status: 'DISCONNECTED',
@@ -298,6 +313,78 @@ async function handleIncomingMessage(msg) {
     });
   }
 
+  const audioPrefix = isAudioInput ? `🎙️ _"${userText}"_\n\n` : '';
+
+  // Interceptar estado conversacional pendiente (ej: esperando concepto de gasto o ingreso)
+  const activeState = await getUserState({ userId: user.id });
+  if (activeState && userText && !isImageInput) {
+    const cleanLower = userText.toLowerCase().trim();
+
+    // Cancelación explícita
+    if (cleanLower === 'cancela' || cleanLower === 'cancelar' || cleanLower === 'olvidalo' || cleanLower === 'olvídalo' || cleanLower === 'no anotes nada') {
+      await clearUserState({ userId: user.id });
+      const cancelReply = `${audioPrefix}❌ Entendido, cancelé el registro pendiente.`;
+      botSentTexts.add(cancelReply.trim());
+      await msg.reply(cancelReply);
+      return;
+    }
+
+    // Si el usuario envió otro comando específico, limpiamos el estado pendiente para no bloquearlo
+    const isOtherAction = cleanLower.startsWith('http') ||
+      cleanLower.includes('reporte') ||
+      cleanLower.includes('balance') ||
+      cleanLower.startsWith('pon ') ||
+      cleanLower.startsWith('enviame ') ||
+      cleanLower.startsWith('recuerda');
+
+    if (!isOtherAction) {
+      if (activeState.state === 'AWAITING_EXPENSE_CONCEPT') {
+        const concept = userText.replace(/^(en|de|por|para)\s+/i, '').trim() || userText.trim();
+        const amount = activeState.data?.amount || 0;
+        const txDate = activeState.data?.date ? new Date(activeState.data.date) : new Date();
+
+        await recordTransaction({
+          userId: user.id,
+          type: 'expense',
+          amount,
+          description: concept,
+          date: txDate,
+        });
+        await clearUserState({ userId: user.id });
+
+        const confirmReply = `${audioPrefix}💸 *Gasto anotado exitosamente*\n• Monto: *${formatCurrencyCOP(amount)}*\n• Concepto: *${concept}*\n• Hora: *${formatTimeColombia(txDate)}*\n\n_Para ver tu balance del día, escribe "reporte de hoy"._`;
+        botSentTexts.add(confirmReply.trim());
+        await msg.reply(confirmReply);
+        return;
+      }
+
+      if (activeState.state === 'AWAITING_INCOME_CONCEPT') {
+        const concept = userText.replace(/^(de|por|en|desde)\s+/i, '').trim() || userText.trim();
+        const amount = activeState.data?.amount || 0;
+        const method = activeState.data?.paymentMethod;
+        const txDate = activeState.data?.date ? new Date(activeState.data.date) : new Date();
+
+        await recordTransaction({
+          userId: user.id,
+          type: 'income',
+          amount,
+          description: concept,
+          paymentMethod: method,
+          date: txDate,
+        });
+        await clearUserState({ userId: user.id });
+
+        const methodStr = method ? ` _(${method})_` : '';
+        const confirmReply = `${audioPrefix}💰 *Ingreso anotado exitosamente*\n• Monto: *+${formatCurrencyCOP(amount)}*\n• Concepto: *${concept}*${methodStr}\n• Hora: *${formatTimeColombia(txDate)}*\n\n_Para ver tu balance del día, escribe "reporte de hoy"._`;
+        botSentTexts.add(confirmReply.trim());
+        await msg.reply(confirmReply);
+        return;
+      }
+    } else {
+      await clearUserState({ userId: user.id });
+    }
+  }
+
   // Analyze intent with Groq
   const analysis = await parseUserMessage(userText, {
     hasMedia: isImageInput,
@@ -305,8 +392,6 @@ async function handleIncomingMessage(msg) {
   });
 
   console.log(`[WhatsApp] 🤖 Intent: ${analysis.intent} | Reply: "${analysis.responseMessage.slice(0, 50)}..."`);
-
-  const audioPrefix = isAudioInput ? `🎙️ _"${userText}"_\n\n` : '';
 
   try {
     // A. MUSIC INTENT
@@ -571,9 +656,145 @@ async function handleIncomingMessage(msg) {
           console.log(`[WhatsApp] ⏰ Scheduled reminder "${rem.text}" for ${targetDate.toISOString()}`);
         }
       }
+
+      const replyText = `${audioPrefix}${analysis.responseMessage}`;
+      botSentTexts.add(replyText.trim());
+      await msg.reply(replyText);
+      return;
     }
 
-    // F. VENTING, OTHER, OR REMINDER CONFIRMATION REPLY
+    // E2. LIST REMINDERS INTENT
+    if (analysis.intent === 'list_reminders') {
+      const listRes = await listUserReminders({ userId: user.id });
+      const reply = `${audioPrefix}${listRes.text}`;
+      botSentTexts.add(reply.trim());
+      await msg.reply(reply);
+      return;
+    }
+
+    // E3. DELETE REMINDER INTENT
+    if (analysis.intent === 'delete_reminder') {
+      const delRes = await deleteUserReminder({
+        userId: user.id,
+        target: analysis.reminderTarget || userText,
+      });
+      const reply = `${audioPrefix}${delRes.message}`;
+      botSentTexts.add(reply.trim());
+      await msg.reply(reply);
+      return;
+    }
+
+    // E4. REMINDER TYPES INTENT
+    if (analysis.intent === 'reminder_types') {
+      const infoText = getReminderTypesInfo();
+      const reply = `${audioPrefix}${infoText}`;
+      botSentTexts.add(reply.trim());
+      await msg.reply(reply);
+      return;
+    }
+
+    // F1. FINANCE EXPENSE INTENT
+    if (analysis.intent === 'finance_expense') {
+      if (analysis.needsDescription || !analysis.description) {
+        await setUserState({
+          userId: user.id,
+          state: 'AWAITING_EXPENSE_CONCEPT',
+          data: {
+            amount: analysis.amount,
+            date: new Date().toISOString(),
+          },
+        });
+
+        const reply = `${audioPrefix}¿En qué te gastaste esos ${formatCurrencyCOP(analysis.amount)}? Cuéntame para anotarlo bien. 📝`;
+        botSentTexts.add(reply.trim());
+        await msg.reply(reply);
+        return;
+      }
+
+      const tx = await recordTransaction({
+        userId: user.id,
+        type: 'expense',
+        amount: analysis.amount,
+        description: analysis.description,
+        category: analysis.category,
+        paymentMethod: analysis.paymentMethod,
+        person: analysis.person,
+        date: new Date(),
+      });
+
+      const personSuffix = analysis.person ? ` _(a ${analysis.person})_` : '';
+      const reply = `${audioPrefix}💸 *Gasto anotado exitosamente*\n• Monto: *${formatCurrencyCOP(tx.amount)}*\n• Concepto: *${tx.description}*${personSuffix}\n• Hora: *Hoy, ${formatTimeColombia(tx.date)}*\n\n_Para ver tu balance del día, escribe "reporte de hoy"._`;
+      botSentTexts.add(reply.trim());
+      await msg.reply(reply);
+      return;
+    }
+
+    // F2. FINANCE INCOME INTENT
+    if (analysis.intent === 'finance_income') {
+      if (analysis.needsDescription || !analysis.description) {
+        await setUserState({
+          userId: user.id,
+          state: 'AWAITING_INCOME_CONCEPT',
+          data: {
+            amount: analysis.amount,
+            paymentMethod: analysis.paymentMethod,
+            date: new Date().toISOString(),
+          },
+        });
+
+        const reply = `${audioPrefix}¿De qué o de parte de quién recibiste esos ${formatCurrencyCOP(analysis.amount)}? Cuéntame para anotarlo bien. 💰`;
+        botSentTexts.add(reply.trim());
+        await msg.reply(reply);
+        return;
+      }
+
+      const tx = await recordTransaction({
+        userId: user.id,
+        type: 'income',
+        amount: analysis.amount,
+        description: analysis.description,
+        category: analysis.category,
+        paymentMethod: analysis.paymentMethod,
+        date: new Date(),
+      });
+
+      const methodSuffix = tx.paymentMethod ? ` _(${tx.paymentMethod})_` : '';
+      const reply = `${audioPrefix}💰 *Ingreso anotado exitosamente*\n• Monto: *+${formatCurrencyCOP(tx.amount)}*\n• Concepto: *${tx.description}*${methodSuffix}\n• Hora: *Hoy, ${formatTimeColombia(tx.date)}*\n\n_Para ver tu balance del día, escribe "reporte de hoy"._`;
+      botSentTexts.add(reply.trim());
+      await msg.reply(reply);
+      return;
+    }
+
+    // F3. FINANCE REPORT INTENT
+    if (analysis.intent === 'finance_report') {
+      const report = await getFinancialReport({
+        userId: user.id,
+        period: analysis.period || 'today',
+      });
+
+      const reply = `${audioPrefix}${report.reportText}`;
+      botSentTexts.add(reply.trim());
+      await msg.reply(reply);
+      return;
+    }
+
+    // F4. FINANCE DELETE LAST TRANSACTION
+    if (analysis.intent === 'finance_delete_last') {
+      const deleted = await deleteLastTransaction({ userId: user.id });
+      if (deleted) {
+        const typeLabel = deleted.type === 'income' ? 'Ingreso' : 'Gasto';
+        const reply = `${audioPrefix}🗑️ *Transacción eliminada exitosamente:*\n• Tipo: *${typeLabel}*\n• Monto: *${formatCurrencyCOP(deleted.amount)}*\n• Concepto: *${deleted.description}*`;
+        botSentTexts.add(reply.trim());
+        await msg.reply(reply);
+      } else {
+        const reply = `${audioPrefix}🔍 No encontré ninguna transacción registrada para eliminar.`;
+        botSentTexts.add(reply.trim());
+        await msg.reply(reply);
+      }
+      return;
+    }
+
+    // G. VENTING, OTHER, OR REMINDER CONFIRMATION REPLY
     const replyText = `${audioPrefix}${analysis.responseMessage}`;
     botSentTexts.add(replyText.trim());
     if (botSentTexts.size > 500) {
