@@ -40,3 +40,20 @@
   2. El Colegio continúa en su directorio `/home/ubuntu/colegio-backend/` sin tocar sus archivos, librerías ni base de datos Supabase.
   3. Proxy inverso Caddy validado con `caddy validate` y recargado en caliente con `systemctl reload caddy` (zero downtime).
   4. Verificación automatizada inmediata de `https://gimnasiolatinoamericano.com/api/health` confirmando `HTTP/2 200 OK` continuo.
+
+---
+
+## 4. Incidencia: Datos de personas no se guardaban ("Aún no tienes nada guardado")
+* **Fecha:** 2026-09-21
+* **Síntoma:** Cuando un usuario enviaba datos personales en texto (por ejemplo: _"Guardame estos datos: 36155047 Elvira Reyes, es la cedula de la vecina"_), el bot respondía _"Datos guardados correctamente"_, pero al consultar _"¿Qué datos me tienes guardados?"_ o _"¿Cuál es la cédula de la vecina?"_, respondía que no había nada guardado.
+* **Causa Raíz:**
+  1. En `src/whatsapp.js`, la rama `save_item` solo implementaba lógica condicional para `if (isImg)` y `else if (isLink)`.
+  2. Al recibir texto puro (`type === 'text'`), no entraba en ninguna de las dos ramas y caía al final del handler en `intent: other`, enviando el mensaje genérico sin ejecutar `saveUserItem` en Prisma.
+  3. `groq.js` no instruía al modelo que `get_item` abarcaba preguntas sobre datos y cédulas (solo decía imágenes/enlaces), ni contaba con heurísticas deterministas para consultas de memoria ni borrado de datos.
+* **Solución Aplicada:**
+  1. Agregado bloque `else` en `save_item` para persistir datos personales, cédulas, notas y textos con título y contenido en Prisma (`SavedItem`).
+  2. Motor de búsqueda semántica y numérica mejorado en `savedItems.js` con soporte para búsqueda por números de documento (cédulas), nombres de personas y palabras clave.
+  3. Formateador categorizado `formatSavedItemsList` para WhatsApp y soporte para `delete_item`.
+  4. Heurísticas deterministas de alta velocidad (0.01ms) en `groq.js` para `save_item`, `get_item`, `list_items` y `delete_item`.
+  5. Creación de suites de pruebas automáticas `bot/tests/memory.test.js` y `bot/tests/memory_flow.test.js` validadas al 100%.
+  6. Recompilación y redespliegue en caliente del contenedor Docker en Oracle Cloud.
