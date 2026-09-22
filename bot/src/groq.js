@@ -142,6 +142,98 @@ function parseHeuristicReminder(text) {
     };
   }
 
+  // 3e. Check for List Saved Items / Memory
+  if (
+    lower.includes('que datos me tienes') ||
+    lower.includes('qué datos me tienes') ||
+    lower.includes('que datos tienes guardado') ||
+    lower.includes('qué datos tienes guardado') ||
+    lower.includes('que datos tengo guardado') ||
+    lower.includes('qué datos tengo guardado') ||
+    lower.includes('que tengo guardado') ||
+    lower.includes('qué tengo guardado') ||
+    lower.includes('mis datos guardados') ||
+    lower.includes('ver mis datos') ||
+    lower.includes('mostrar mis datos') ||
+    lower.includes('lista de cosas guardadas') ||
+    lower.includes('que me tienes guardado') ||
+    lower.includes('qué me tienes guardado')
+  ) {
+    return {
+      intent: 'list_items',
+      responseMessage: 'Consultando tus datos y elementos guardados...',
+    };
+  }
+
+  // 3f. Check for Delete Saved Item / Memory
+  const deleteItemMatch = text.match(/^(?:borra|elimina|quita)\s+(?:el\s+dato|la\s+nota|la\s+informaci[oó]n|la\s+imagen|la\s+foto|el\s+enlace|el\s+link)?\s*(?:de\s+|del\s+)?(.+)/i);
+  if (deleteItemMatch && (lower.startsWith('borra el dato') || lower.startsWith('elimina el dato') || lower.startsWith('borra la nota') || lower.startsWith('elimina la nota') || lower.startsWith('borra la imagen') || lower.startsWith('elimina la imagen'))) {
+    const query = deleteItemMatch[1].trim();
+    return {
+      intent: 'delete_item',
+      query,
+      responseMessage: `Eliminando dato sobre "${query}"...`,
+    };
+  }
+
+  // 3g. Check for Save Data / Note / Person Info
+  if (
+    lower.includes('guardame estos datos') ||
+    lower.includes('guarda estos datos') ||
+    lower.includes('guardame este dato') ||
+    lower.includes('guarda este dato') ||
+    lower.includes('anota estos datos') ||
+    lower.includes('anota este dato') ||
+    lower.startsWith('anota:') ||
+    lower.startsWith('guarda:')
+  ) {
+    let description = 'Dato personal';
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const descMatch = text.match(/(?:es\s+la\s+|es\s+el\s+|es\s+)(\w[\w\s]{2,40})/i);
+    if (descMatch) {
+      description = descMatch[1].trim();
+    } else if (lines.length > 1) {
+      const firstClean = lines[0].replace(/^gu[aá]rdame\s*(estos\s+datos|este\s+dato|esto)?:?/i, '').trim();
+      description = firstClean || 'Dato guardado';
+    }
+
+    return {
+      intent: 'save_item',
+      itemType: 'text',
+      description,
+      responseMessage: `💾 Guardando datos...`,
+    };
+  }
+
+  // 3h. Check for Get Item / Query Memory
+  const getItemMatch = text.match(/^(?:cu[aá]l\s+es|dame|p[aá]same|mu[eé]strame|qu[eé]\s+datos\s+tienes\s+de|qu[eé]\s+sabes\s+de|qui[eé]n\s+es)\s+(?:el\s+|la\s+|los\s+|las\s+)?(.+)/i);
+  if (getItemMatch && (
+    lower.includes('cedula') ||
+    lower.includes('cédula') ||
+    lower.includes('telefono') ||
+    lower.includes('teléfono') ||
+    lower.includes('direccion') ||
+    lower.includes('dirección') ||
+    lower.includes('clave') ||
+    lower.includes('contraseña') ||
+    lower.includes('pasame los datos') ||
+    lower.includes('pásame los datos') ||
+    lower.includes('dame los datos') ||
+    lower.includes('datos de') ||
+    lower.includes('pasame la imagen') ||
+    lower.includes('pásame la foto') ||
+    lower.includes('pasame el enlace') ||
+    lower.includes('pásame el link')
+  )) {
+    const rawQuery = getItemMatch[1].trim().replace(/\?+$/, '');
+    return {
+      intent: 'get_item',
+      query: rawQuery,
+      itemType: lower.includes('foto') || lower.includes('imagen') ? 'image' : (lower.includes('enlace') || lower.includes('link') ? 'link' : 'text'),
+      responseMessage: `Consultando información sobre "${rawQuery}"...`,
+    };
+  }
+
   // Check if text is asking for a reminder
   const hasReminderIntent =
     lower.includes('recuerda') ||
@@ -384,6 +476,10 @@ async function parseUserMessage(userMessageText, context = {}) {
     heuristic.intent === 'list_reminders' ||
     heuristic.intent === 'delete_reminder' ||
     heuristic.intent === 'reminder_types' ||
+    heuristic.intent === 'save_item' ||
+    heuristic.intent === 'get_item' ||
+    heuristic.intent === 'list_items' ||
+    heuristic.intent === 'delete_item' ||
     heuristic.intent === 'finance_report' ||
     heuristic.intent === 'finance_delete_last' ||
     (heuristic.intent === 'finance_expense' && !heuristic.needsDescription) ||
@@ -409,7 +505,7 @@ La fecha y hora actual en Colombia (Zona Horaria UTC-5 America/Bogota) es:
 
 Tu trabajo es clasificar la intención del usuario y responder ÚNICAMENTE con un JSON válido siguiendo este schema:
 {
-  "intent": "reminder" | "list_reminders" | "delete_reminder" | "reminder_types" | "save_item" | "get_item" | "list_items" | "music" | "social_media_download" | "scribd_download" | "finance_expense" | "finance_income" | "finance_report" | "finance_delete_last" | "venting" | "other",
+  "intent": "reminder" | "list_reminders" | "delete_reminder" | "reminder_types" | "save_item" | "get_item" | "list_items" | "delete_item" | "music" | "social_media_download" | "scribd_download" | "finance_expense" | "finance_income" | "finance_report" | "finance_delete_last" | "venting" | "other",
   "reminders": [
     {
       "text": "descripción de la tarea específica",
@@ -455,27 +551,45 @@ REGLAS DE CLASIFICACIÓN:
    - "responseMessage": "Aquí tienes los tipos de recordatorios disponibles:".
 
 5. intent = "save_item":
-   - El usuario pide guardar un enlace, una imagen o una nota con contexto.
+   - El usuario pide guardar CUALQUIER tipo de dato, nota, texto, número, datos de personas (cédula, nombre, teléfono), credenciales, claves, direcciones, imágenes o enlaces.
+   - "itemType": "text" (para datos, notas, cédulas, números, textos), "image" (para imágenes) o "link" (para enlaces web).
+   - "description": Título o concepto conciso del dato (ej: "Cédula de la vecina Elvira Reyes", "Clave del wifi", "Dirección de mamá").
+   - Ejemplos:
+     • "Guárdame estos datos: 36155047 Elvira Reyes Es la cedula de la vecina" -> intent: "save_item", itemType: "text", description: "Cédula de la vecina Elvira Reyes"
+     • "Anota el teléfono de Carlos: 3001234567" -> intent: "save_item", itemType: "text", description: "Teléfono de Carlos"
+     • "Guarda que la clave del portón es 9876" -> intent: "save_item", itemType: "text", description: "Clave del portón"
 
 6. intent = "get_item":
-   - El usuario pide recuperar una imagen o enlace guardado.
+   - El usuario pide consultar, buscar o recuperar cualquier dato, cédula, nota, información de una persona, clave, imagen o enlace que guardó previamente.
+   - "query": El término de búsqueda o concepto que el usuario busca (ej: "cédula vecina", "Elvira Reyes", "clave wifi").
+   - Ejemplos:
+     • "¿Cuál es la cédula de la vecina?" -> intent: "get_item", query: "cédula vecina"
+     • "¿Quién es Elvira Reyes?" -> intent: "get_item", query: "Elvira Reyes"
+     • "Pásame los datos de la vecina" -> intent: "get_item", query: "vecina"
+     • "Pásame la foto de donde vivo" -> intent: "get_item", query: "donde vivo", itemType: "image"
 
 7. intent = "list_items":
-   - El usuario quiere saber qué cosas tiene guardadas ("¿qué tengo guardado?").
+   - El usuario pide ver, listar o consultar qué datos, cosas, notas, imágenes o enlaces tiene guardados en total.
+   - Ejemplos: "¿Qué datos me tienes guardados?", "¿Qué datos tienes guardados?", "¿Qué tengo guardado?", "ver mis datos", "mis cosas guardadas".
 
-8. intent = "music":
+8. intent = "delete_item":
+   - El usuario pide borrar o eliminar un dato, nota, imagen o enlace guardado.
+   - "query": El concepto o nombre a borrar (ej: "cédula de la vecina", "Elvira", "clave wifi").
+
+9. intent = "music":
    - El usuario pide que le envíen una canción en audio.
 
-9. intent = "social_media_download":
-   - Descarga de redes sociales (TikTok, Instagram, Facebook, etc.).
+10. intent = "social_media_download":
+    - Descarga de redes sociales (TikTok, Instagram, Facebook, etc.).
 
-10. intent = "scribd_download":
+11. intent = "scribd_download":
     - Descarga de documentos o PDFs de Scribd.
 
-11. intent = "finance_expense":
+12. intent = "finance_expense":
     - Salida de dinero, gasto, compra, pago o haberle dado dinero a alguien.
 
-12. intent = "finance_income":
+13. intent = "finance_income":
+
     - Dinero recibido, cobro, transferencia entrante o pago recibido.
 
 13. intent = "finance_report":

@@ -5,7 +5,13 @@ const path = require('path');
 const prisma = require('./db');
 const { parseUserMessage } = require('./groq');
 const { scheduleReminder, initScheduler } = require('./scheduler');
-const { saveUserItem, findUserItem, listUserItems } = require('./savedItems');
+const {
+  saveUserItem,
+  findUserItem,
+  deleteUserItem,
+  listUserItems,
+  formatSavedItemsList,
+} = require('./savedItems');
 const { transcribeAudio } = require('./audioTranscriber');
 const { downloadSong } = require('./music');
 const { downloadSocialMedia, identifyPlatform } = require('./socialDownloader');
@@ -492,18 +498,18 @@ async function handleIncomingMessage(msg) {
       return;
     }
 
-    // B. SAVE ITEM INTENT (Image, Link, or Note)
+    // B. SAVE ITEM INTENT (Image, Link, Data, Notes, or Person Info)
     if (analysis.intent === 'save_item' || (isImageInput && userText.toLowerCase().includes('guarda'))) {
       const isImg = isImageInput || analysis.itemType === 'image';
       const urlMatch = userText.match(/https?:\/\/[^\s]+/i);
       const isLink = !isImg && (analysis.itemType === 'link' || !!urlMatch);
 
-      const description = analysis.description || userText.replace(/guarda(me)?(\s+este|\s+esta|\s+el)?\s*(enlace|link|imagen|foto)?/gi, '').trim() || (isImg ? 'Foto' : 'Enlace');
-
       if (isImg) {
         if (!downloadedMedia) {
           downloadedMedia = await safeDownloadMedia(clientInstance, msg);
         }
+
+        const description = analysis.description || userText.replace(/guarda(me)?(\s+este|\s+esta|\s+el)?\s*(imagen|foto)?/gi, '').trim() || 'Foto';
 
         if (downloadedMedia && downloadedMedia.data) {
           await saveUserItem({
@@ -527,6 +533,7 @@ async function handleIncomingMessage(msg) {
         }
       } else if (isLink) {
         const linkUrl = analysis.linkUrl || (urlMatch ? urlMatch[0] : userText);
+        const description = analysis.description || userText.replace(/guarda(me)?(\s+este|\s+esta|\s+el)?\s*(enlace|link)?/gi, '').trim() || 'Enlace';
         await saveUserItem({
           userId: user.id,
           type: 'link',
@@ -538,12 +545,39 @@ async function handleIncomingMessage(msg) {
         botSentTexts.add(reply.trim());
         await msg.reply(reply);
         return;
+      } else {
+        // Text / Data / Note / Contacts / Identification / Credentials / General Info
+        let description = analysis.description;
+        if (!description || description.toLowerCase() === 'sin descripción' || description.toLowerCase() === 'dato personal') {
+          const lines = userText.split('\n').map(l => l.trim()).filter(Boolean);
+          const descMatch = userText.match(/(?:es\s+la\s+|es\s+el\s+|es\s+)(\w[\w\s]{2,40})/i);
+          if (descMatch) {
+            description = descMatch[1].trim();
+          } else if (lines.length > 1) {
+            const firstClean = lines[0].replace(/^gu[aá]rdame\s*(estos\s+datos|este\s+dato|esto)?:?/i, '').trim();
+            description = firstClean || 'Dato personal';
+          } else {
+            description = 'Dato guardado';
+          }
+        }
+
+        await saveUserItem({
+          userId: user.id,
+          type: 'text',
+          content: userText,
+          description,
+        });
+
+        const reply = `${audioPrefix}💾 *¡Dato guardado con éxito en tu memoria!*\n\n📌 *Concepto:* ${description}\n📝 *Información guardada:*\n${userText}\n\n_Para consultarlo cuando quieras, pregúntame: "¿Cuál es ${description}?" o "¿Qué datos me tienes guardados?"_.`;
+        botSentTexts.add(reply.trim());
+        await msg.reply(reply);
+        return;
       }
     }
 
-    // C. GET ITEM INTENT (Retrieve saved item)
+    // C. GET ITEM INTENT (Retrieve saved item or data)
     if (analysis.intent === 'get_item') {
-      const searchQuery = analysis.query || userText.replace(/^(pasame|dame|muestrame|cual\s+es|busca)\s+(la\s+imagen|la\s+foto|el\s+enlace|el\s+link)?\s*(de\s+|del\s+)?/i, '').trim();
+      const searchQuery = analysis.query || userText.replace(/^(pasame|pásame|dame|muestrame|muéstrame|cual\s+es|cuál\s+es|busca|que\s+sabes\s+de|qué\s+sabes\s+de)\s+(la\s+imagen|la\s+foto|el\s+enlace|el\s+link|el\s+dato\s+de|la\s+informaci[oó]n\s+de)?\s*(de\s+|del\s+)?/i, '').trim();
       const itemType = analysis.itemType === 'all' ? null : analysis.itemType;
 
       const item = await findUserItem({
@@ -553,7 +587,7 @@ async function handleIncomingMessage(msg) {
       });
 
       if (!item) {
-        const reply = `${audioPrefix}🔍 No encontré nada guardado relacionado con *"${searchQuery}"*.\n\nPuedes escribir *"¿Qué tengo guardado?"* para ver tu lista.`;
+        const reply = `${audioPrefix}🔍 No encontré ningún dato guardado relacionado con *"${searchQuery}"*.\n\nPuedes escribir *"¿Qué datos me tienes guardados?"* para ver tu lista completa.`;
         botSentTexts.add(reply.trim());
         await msg.reply(reply);
         return;
@@ -571,7 +605,7 @@ async function handleIncomingMessage(msg) {
         await msg.reply(reply);
         return;
       } else {
-        const reply = `${audioPrefix}📝 *${item.description}:*\n${item.content}`;
+        const reply = `${audioPrefix}📋 *Información guardada de "${item.description}":*\n\n${item.content}`;
         botSentTexts.add(reply.trim());
         await msg.reply(reply);
         return;
@@ -581,45 +615,26 @@ async function handleIncomingMessage(msg) {
     // D. LIST ITEMS INTENT
     if (analysis.intent === 'list_items') {
       const items = await listUserItems({ userId: user.id });
-      if (!items.length) {
-        const reply = `${audioPrefix}📂 Aún no tienes nada guardado.\n\nPuedes enviarme fotos o enlaces diciendo por ejemplo: _"Guárdame esta foto de donde vivo"_ o _"Guarda este enlace"_.`;
+      const reply = `${audioPrefix}${formatSavedItemsList(items)}`;
+      botSentTexts.add(reply.trim());
+      await msg.reply(reply);
+      return;
+    }
+
+    // D2. DELETE ITEM INTENT
+    if (analysis.intent === 'delete_item') {
+      const target = analysis.query || userText.replace(/^(?:borra|elimina|quita)\s+(?:el\s+dato|la\s+nota|la\s+imagen|el\s+enlace)?\s*(?:de\s+|del\s+)?/i, '').trim();
+      const deleted = await deleteUserItem({ userId: user.id, query: target });
+      if (!deleted) {
+        const reply = `${audioPrefix}🔍 No encontré ningún dato guardado relacionado con *"${target}"* para eliminar.\n\nEscribe *"¿Qué datos me tienes guardados?"* para ver tu lista.`;
         botSentTexts.add(reply.trim());
         await msg.reply(reply);
         return;
       }
 
-      let textList = `${audioPrefix}📂 *Tus elementos guardados:*\n\n`;
-      const images = items.filter((i) => i.type === 'image');
-      const links = items.filter((i) => i.type === 'link');
-      const others = items.filter((i) => i.type !== 'image' && i.type !== 'link');
-
-      if (images.length) {
-        textList += `📸 *Imágenes:*\n`;
-        images.forEach((img) => {
-          textList += `• "${img.description}"\n`;
-        });
-        textList += `\n`;
-      }
-
-      if (links.length) {
-        textList += `🔗 *Enlaces:*\n`;
-        links.forEach((l) => {
-          textList += `• "${l.description}": ${l.content}\n`;
-        });
-        textList += `\n`;
-      }
-
-      if (others.length) {
-        textList += `📝 *Notas:*\n`;
-        others.forEach((o) => {
-          textList += `• "${o.description}": ${o.content}\n`;
-        });
-        textList += `\n`;
-      }
-
-      textList += `_Para pedir cualquiera, dime por ejemplo: "Pásame la imagen de [nombre]" o "Pásame el enlace de [nombre]"_`;
-      botSentTexts.add(textList.trim());
-      await msg.reply(textList);
+      const reply = `${audioPrefix}🗑️ *Dato eliminado con éxito:*\nHe borrado de tu memoria: *"${deleted.description}"*.`;
+      botSentTexts.add(reply.trim());
+      await msg.reply(reply);
       return;
     }
 
