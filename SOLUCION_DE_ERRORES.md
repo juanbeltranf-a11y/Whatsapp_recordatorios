@@ -55,5 +55,25 @@
   2. Motor de búsqueda semántica y numérica mejorado en `savedItems.js` con soporte para búsqueda por números de documento (cédulas), nombres de personas y palabras clave.
   3. Formateador categorizado `formatSavedItemsList` para WhatsApp y soporte para `delete_item`.
   4. Heurísticas deterministas de alta velocidad (0.01ms) en `groq.js` para `save_item`, `get_item`, `list_items` y `delete_item`.
-  5. Creación de suites de pruebas automáticas `bot/tests/memory.test.js` y `bot/tests/memory_flow.test.js` validadas al 100%.
+5. Creación de suites de pruebas automáticas `bot/tests/memory.test.js` y `bot/tests/memory_flow.test.js` validadas al 100%.
   6. Recompilación y redespliegue en caliente del contenedor Docker en Oracle Cloud.
+
+---
+
+## 5. Incidencia: Desconexión Recurrente del Bot y Mensajes Perdidos Durante Apagado
+* **Fecha:** 2026-09-24
+* **Síntomas:**
+  1. El bot se desconectaba intermitentemente de WhatsApp Web.
+  2. Al reiniciarse el contenedor o crashear, arrojaba errores en logs: `protocolTimeout`, `Failed to open UKM database: 0 database is locked`, `IO error: .../GCM Store/LOCK` y `GPU process exited unexpectedly: exit_code=133`.
+  3. Los mensajes enviados por usuarios mientras el bot estaba apagado o desconectado quedaban sin respuesta.
+* **Causas Raíz:**
+  1. **Archivos de bloqueo residuales:** Chromium headless crea archivos `LOCK` y sockets de bloqueo (`Singleton*`) en múltiples subdirectorios de perfil (`GCM Store/LOCK`, `IndexedDB/.../LOCK`, `Service Worker/.../LOCK`, etc.). La función de limpieza previa (`cleanupSingletonLocks`) solo revisaba la raíz de `.wwebjs_auth/session` de manera plana, dejando intactos los `LOCK` internos y provocando fallos de I/O permanentes al reiniciar.
+  2. **Incompatibilidad SwiftShader en ARM64:** El argumento `--enable-unsafe-swiftshader` provocaba caídas con `exit_code=133` en la arquitectura ARM64 de Oracle Cloud.
+  3. **Timeout de protocolo muy ajustado:** El timeout del protocolo de Puppeteer (`60000ms`) expiraba durante las fases de sincronización pesada de WhatsApp Web.
+  4. **Falta de mecanismo Catch-Up:** `whatsapp-web.js` solo disparaba eventos en tiempo real (`client.on('message')`). No existía rutina al conectarse (`ready`) que consultara chats no leídos para procesar los mensajes acumulados durante el downtime.
+* **Solución Aplicada:**
+  1. **Limpieza Recursiva de Locks (`cleanupAllLocks`):** Se implementó una rutina recursiva en `src/whatsapp.js` que elimina en profundidad todos los archivos `LOCK`, `*.lock` y `Singleton*` antes de inicializar Puppeteer.
+  2. **Flags de Estabilidad Chromium ARM64:** Se retiró `--enable-unsafe-swiftshader`, se añadió `--no-zygote`, y se amplió el `protocolTimeout` a `180000ms` (3 minutos).
+  3. **Sistema Automático de Catch-Up Offline:** Al dispararse el evento `ready`, el cliente consulta todos los chats (`clientInstance.getChats()`), filtra los que tienen `unreadCount > 0`, descarga los mensajes pendientes (`chat.fetchMessages`) y los introduce ordenadamente en la cola de procesamiento (`enqueueMessage`), evitando duplicados con `processedMessageIds`.
+  4. **Despliegue y Validación:** Sincronizado vía `rsync`, limpiados locks residuales en el host, recompilado el contenedor en Oracle Cloud y verificado el ciclo de vida de conexión.
+

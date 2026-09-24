@@ -56,23 +56,32 @@ function getClient() {
   return clientInstance;
 }
 
-function cleanupSingletonLocks(sessionDir) {
+function cleanupAllLocks(targetDir) {
   try {
-    if (!fs.existsSync(sessionDir)) return;
-    const items = fs.readdirSync(sessionDir);
-    for (const item of items) {
-      if (item.startsWith('Singleton')) {
-        const fullPath = path.join(sessionDir, item);
+    if (!fs.existsSync(targetDir)) return;
+    const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(targetDir, entry.name);
+      if (entry.isDirectory()) {
+        cleanupAllLocks(fullPath);
+      } else if (
+        entry.name.startsWith('Singleton') ||
+        entry.name === 'LOCK' ||
+        entry.name.endsWith('.lock')
+      ) {
         try {
           fs.unlinkSync(fullPath);
-          console.log(`[WhatsApp] Cleaned lock file: ${item}`);
-        } catch (e) {}
+          console.log(`[WhatsApp] Cleaned lock file: ${fullPath}`);
+        } catch (e) {
+          console.warn(`[WhatsApp] Could not delete lock file ${fullPath}:`, e.message);
+        }
       }
     }
   } catch (err) {
-    console.warn('[WhatsApp] Error during lock cleanup:', err.message);
+    console.warn('[WhatsApp] Error during recursive lock cleanup:', err.message);
   }
 }
+
 
 async function safeDownloadMedia(client, msg) {
   if (!msg || !msg.hasMedia) return null;
@@ -865,7 +874,7 @@ function initWhatsAppClient() {
   const authDir = process.env.WWEBJS_DIR || 
     (fs.existsSync('/app/data') ? '/app/data/.wwebjs_auth' : './.wwebjs_auth');
 
-  cleanupSingletonLocks(path.join(authDir, 'session'));
+  cleanupAllLocks(path.join(authDir, 'session'));
 
   clientInstance = new Client({
     authStrategy: new LocalAuth({
@@ -891,13 +900,14 @@ function initWhatsAppClient() {
     `,
     puppeteer: {
       headless: true,
-      protocolTimeout: 60000,
+      protocolTimeout: 180000,
       dumpio: true,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--no-first-run',
+        '--no-zygote',
         '--disable-gpu',
         '--disable-software-rasterizer',
         '--disable-accelerated-2d-canvas',
@@ -907,7 +917,6 @@ function initWhatsAppClient() {
         '--disable-webrtc',
         '--disable-webrtc-hw-decoding',
         '--disable-webrtc-hw-encoding',
-        '--enable-unsafe-swiftshader',
         '--disable-search-engine-choice-screen',
         '--no-default-browser-check',
         '--disable-features=WebRtcHideLocalIpsWithMdns,WebRTC,WebRTC-H264WithOpenH264FFmpeg,WebUIOmniboxPopup,WebUIOmniboxAimPopup,SidePanel,ChromeRefresh2023,OmniboxUIBareMin',
@@ -979,6 +988,40 @@ function initWhatsAppClient() {
     } catch (e) {}
 
     await initScheduler(clientInstance);
+
+    // CATCH-UP: Recuperar y procesar mensajes que llegaron mientras el bot estuvo apagado / desconectado
+    try {
+      console.log('[WhatsApp] 📬 Buscando mensajes no leídos recibidos durante la desconexión...');
+      const chats = await clientInstance.getChats();
+      let caughtUpCount = 0;
+
+      for (const chat of chats) {
+        // Ignorar grupos y difusiones
+        if (chat.isGroup || chat.id?._serialized?.includes('broadcast')) continue;
+
+        if (chat.unreadCount > 0) {
+          console.log(`[WhatsApp Catch-Up] Chat ${chat.id._serialized} tiene ${chat.unreadCount} mensaje(s) no leído(s).`);
+          try {
+            const limit = Math.min(chat.unreadCount, 15);
+            const unreadMsgs = await chat.fetchMessages({ limit });
+            
+            for (const unreadMsg of unreadMsgs) {
+              const msgId = unreadMsg.id?._serialized || unreadMsg.id?.id;
+              if (!unreadMsg.fromMe && msgId && !processedMessageIds.has(msgId)) {
+                console.log(`[WhatsApp Catch-Up] 📥 Encolando mensaje no leído de ${unreadMsg.from}: "${unreadMsg.body?.slice(0, 30)}..."`);
+                enqueueMessage(unreadMsg);
+                caughtUpCount++;
+              }
+            }
+          } catch (chatFetchErr) {
+            console.warn(`[WhatsApp Catch-Up] Error al obtener mensajes de ${chat.id._serialized}:`, chatFetchErr.message);
+          }
+        }
+      }
+      console.log(`[WhatsApp Catch-Up] ✅ Catch-up completado. Total mensajes recuperados: ${caughtUpCount}`);
+    } catch (catchUpErr) {
+      console.error('[WhatsApp Catch-Up] Error general al recuperar mensajes pendientes:', catchUpErr.message);
+    }
 
     // Keep-alive heartbeat: keeps WebSocket active, prevents idle timeout
     if (keepAliveTimer) clearInterval(keepAliveTimer);
